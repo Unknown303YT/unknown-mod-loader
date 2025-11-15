@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" shutdownHook="disable">
+    <Filters>
+        <ThresholdFilter level="INFO" onMatch="ACCEPT" onMismatch="DENY"/>
+
+<!--        <MarkerFilter marker="MARKER NAME" onMatch="ACCEPT" onMismatch="NEUTRAL"/>-->
+    </Filters>
+
+    <Appenders>
+        <TerminalConsole name="Console">
+            <PatternLayout>
+                <LoggerNamePatternSelecter
+                    defaultPattern="%highlight{[%d{HH:mm:ss}] [%t/%level] [%c{2.}/%markerSimpleName]: %msg%n%throwable">
+                    <PatternMatch key="net.minecraft." pattern="%highlightForge{[%d{HH:mm:ss}] [%t/%level] [minecraft/%logger{1}]: %minecraftFormatting{%msg{nolookup}}%n%tEx}"/>
+                    <PatternMatch key="com.mojang." pattern="%highlightForge{[%d{HH:mm:ss}] [%t/%level] [mojang/%logger{1}]: %minecraftFormatting{%msg{nolookup}}%n%tEx}"/>
+                </LoggerNamePatternSelecter>
+            </PatternLayout>
+        </TerminalConsole>
+
+        <RollingRandomAccessFile name="File"
+                                 fileName="logs/latest.log"
+                                 filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="[%d{ddMMMyyyy HH:mm:ss.SSS}] [%t/%level] [%logger/%markerSimpleName]: %msg{strip}%n%xEx"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy/>
+                <OnStartupTriggeringPolicy/>
+            </Policies>
+            <DefaultRolloverStrategy max="99" fileIndex="min"/>
+        </RollingRandomAccessFile>
+
+        <RollingRandomAccessFile name="DebugFile"
+                                 fileName="logs/debug.log"
+                                 filePattern="logs/debug-%i.log.gz">
+            <PatternLayout pattern="[%d{ddMMMyyyy HH:mm:ss.SSS}] [%t/%level] [%logger/%markerSimpleName]: %msg{strip}%n%xEx"/>
+            <Policies>
+                <OnStartupTriggeringPolicy/>
+                <TimeBasedTriggeringPolicy size="200MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="5" fileIndex="min"/>
+        </RollingRandomAccessFile>
+    </Appenders>
+
+    <Loggers>
+        <Logger name="com.mojang" level="info"/>
+        <Logger name="net.minecraft" level="info"/>
+        <Logger name="com.riverstone.unknown303.unknown_modloader" level="debug"/>
+
+        <Root level="all">
+            <AppenderRef ref="Console" level="info"/>
+            <AppenderRef ref="File" level="info"/>
+            <AppenderRef ref="DebugFile" level="debug"/>
+        </Root>
+    </Loggers>
+</Configuration>

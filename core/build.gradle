@@ -1,0 +1,23 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+configurations {
+    implementation.extendsFrom shadow
+}
+
+dependencies {
+    implementation "org.spongepowered:mixin:${mixin_version}"
+    shadow annotationProcessor("io.github.llamalad7:mixinextras-common:${mixin_extras_version}")
+
+    implementation "org.apache.logging.log4j:log4j-core:${log4j_version}"
+    implementation "org.apache.logging.log4j:log4j-api:${log4j_version}"
+    implementation "org.apache.logging.log4j:log4j-slf4j2-impl:${log4j_version}"
+}
+
+shadowJar {
+    configurations = [project.configurations.shadow]
+    relocate("com.llamalad7.mixinextras", "${loader_group}.mixinextras")
+    mergeServiceFiles()
+}

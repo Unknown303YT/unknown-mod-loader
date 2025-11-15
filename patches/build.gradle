@@ -1,0 +1,241 @@
+import net.fabricmc.tinyremapper.OutputConsumerPath
+import net.fabricmc.tinyremapper.TinyRemapper
+import net.fabricmc.tinyremapper.TinyUtils
+
+buildscript {
+    repositories {
+        maven {
+            name = "FabricMC"
+            url = "https://maven.fabricmc.net/"
+        }
+    }
+
+    dependencies {
+        classpath "net.fabricmc:tiny-remapper:${tiny_remapper_version}:fat"
+        classpath "net.fabricmc:tiny-mappings-parser:${tiny_mappings_parser_version}"
+    }
+}
+
+plugins {
+    id 'java'
+    id 'fabric-loom' version "${loom_version}"
+}
+
+configurations {
+    decompiler
+}
+
+configurations.implementation {
+    exclude group: "com.mojang", module: "minecraft"
+    exclude group: "net.minecraft", module: "minecraft"
+}
+
+repositories {
+    maven {
+        name = "FabricMC"
+        url = "https://maven.fabricmc.net/"
+    }
+    maven {
+        name = "ParchmentMC"
+        url = "https://maven.parchmentmc.org/"
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.layered {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${minecraft_version}:${parchment_version}@zip")
+    }
+    decompiler "org.vineflower:vineflower:${vineflower_version}"
+}
+
+tasks.register("extractVanilla") {
+    group = "UML Setup"
+    description = "Extracts the compiled vanilla code into the project."
+    dependsOn 'downloadAssets', 'genSources'
+    finalizedBy '_extractClient', '_extractServer'
+}
+
+tasks.register("_extractClient", Copy) {
+    group = null
+
+    def mcJar = file("${gradle.gradleUserHomeDir}/caches/fabric-loom/${minecraft_version}/minecraft-client.jar")
+    def rawDir = layout.buildDirectory.dir("vanilla-raw").get()
+
+    from zipTree(mcJar)
+    into rawDir
+
+    inputs.file(mcJar)
+    outputs.dir(rawDir)
+}
+
+tasks.register("_extractServer", Copy) {
+    group = null
+
+    def mcJar = file("${gradle.gradleUserHomeDir}/caches/fabric-loom/${minecraft_version}/minecraft-server.jar")
+    def rawDir = layout.buildDirectory.dir("vanilla-raw").get()
+
+    from zipTree(mcJar)
+    into rawDir
+
+    inputs.file(mcJar)
+    outputs.dir(rawDir)
+}
+
+tasks.register("remapVanilla") {
+    group = "UML Setup"
+    description = "Remaps the compiled vanilla code into correct mappings"
+
+    def mappings = loom.getMappingsFile()
+
+    def inputDir = layout.buildDirectory.dir("vanilla-raw").get().asFile
+    def outputDir = layout.buildDirectory.dir("vanilla-remapped").get().asFile
+
+    doLast {
+        def remapper = TinyRemapper.newRemapper().withMappings(
+                TinyUtils.createTinyMappingProvider(
+                        mappings.toPath(), "official", "named"
+                ))
+                .renameInvalidLocals(true)
+                .build()
+
+        try {
+            def outputConsumer = new OutputConsumerPath.Builder(outputDir.toPath()).build()
+            outputConsumer.addNonClassFiles(inputDir.toPath())
+            remapper.readInputs(inputDir.toPath())
+            remapper.apply(outputConsumer)
+            outputConsumer.close()
+        } finally {
+            remapper.finish()
+        }
+    }
+
+    inputs.dir(inputDir)
+    outputs.dir(outputDir)
+}
+
+tasks.register("jarRemappedVanilla", Zip) {
+    group = "UML Setup"
+    description = "Zips the remapped vanilla code into a jar file."
+
+    archiveFileName = "vanilla-remapped.jar"
+    destinationDirectory = layout.buildDirectory.dir("tmp")
+
+    from layout.buildDirectory.dir("vanilla-remapped")
+}
+
+tasks.register("decompileVanilla", Exec) {
+    group = "UML Setup"
+    description = "Decompiles the remapped vanilla code using Vineflower."
+    dependsOn 'jarRemappedVanilla'
+
+    def inputJar = layout.buildDirectory.file("tmp/vanilla-remapped.jar").get().asFile
+    def outputDir = layout.buildDirectory.dir("vanilla-remapped-source").get().asFile
+
+    def vineflowerJar = configurations.decompiler.singleFile
+
+    executable = 'java'
+    args = [
+            '-Xmx8G', '-jar', vineflowerJar.absolutePath,
+            "--decompile-generics=true", "--inden-string=   ",
+            "--add-excluded=**/module-info.class", "--include-classpath=1", "--folder",
+            inputJar.absolutePath, outputDir.absolutePath
+    ]
+
+    inputs.file(inputJar)
+    outputs.dir(outputDir)
+}
+
+tasks.register("genPatches") {
+    group = "UML Setup"
+    description = "Generate a patch per Java file compared to vanilla sources."
+
+    def vanillaDir = layout.buildDirectory.dir("vanilla-remapped-source").get().asFile
+    def modifiedDir = layout.projectDirectory.dir("src/main/java").asFile
+    def patchDir = layout.projectDirectory.dir("patches").asFile
+
+    inputs.dir(vanillaDir)
+    inputs.dir(modifiedDir)
+    outputs.dir(patchDir)
+
+    doLast {
+        modifiedDir.eachFileRecurse { File file ->
+            if (!file.name.endsWith(".java")) return
+
+            def relativePath = modifiedDir.toPath().relativize(file.toPath()).toString()
+            def originalFile = new File(vanillaDir, relativePath)
+
+            if (!originalFile.exists()) {
+                println "Skipping ${relativePath} (no vanilla file)"
+                return
+            }
+
+            def patchFile = new File(patchDir, relativePath + ".patch")
+            patchFile.parentFile.mkdirs()
+
+            def pb = new ProcessBuilder(
+                    "git", "diff", "--no-index", "--patch", "--binary",
+                    originalFile.absolutePath,
+                    file.absolutePath
+            )
+            pb.redirectOutput(patchFile)
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT)
+            def process = pb.start()
+            def exitCode = process.waitFor()
+
+            if (exitCode == 0) {
+                // No changes
+                patchFile.delete()
+            } else if (exitCode == 1) {
+                // Differences found
+                println "Generated patch: ${patchFile}"
+            } else {
+                throw new GradleException("git diff failed for ${relativePath} (exit code ${exitCode})")
+            }
+        }
+    }
+}
+
+tasks.register("patchedMinecraftJar", Jar) {
+    group = "UML Setup"
+    description = "Builds a patched Minecraft jar."
+
+    def vanillaDir = layout.buildDirectory.dir("vanilla-remapped-source").get().asFile
+    def patchDir = file("patches")
+
+    from(vanillaDir)
+
+    doFirst {
+        // copy vanilla sources to temp dir
+        def tempDir = layout.buildDirectory.dir("tmp/vanilla-patched").get().asFile
+        project.copy {
+            from(vanillaDir)
+            into(tempDir)
+        }
+
+        // apply all patches
+        patchDir.eachFileRecurse { patchFile ->
+            if (!patchFile.name.endsWith(".patch")) return
+            def relativePath = patchDir.toPath().relativize(patchFile.toPath()).toString()
+                    .replace(".patch", "")
+            def targetFile = new File(tempDir, relativePath)
+            if (!targetFile.exists()) {
+                throw new GradleException("Patch target not found: ${relativePath}")
+            }
+            println "Applying patch ${patchFile.name} -> ${relativePath}"
+            def pb = new ProcessBuilder("git", "apply", "--whitespace=fix", patchFile.absolutePath)
+            pb.directory(tempDir)
+            pb.inheritIO()
+            def exitCode = pb.start().waitFor()
+            if (exitCode != 0) throw new GradleException("Failed to apply patch ${patchFile.name}")
+        }
+
+        // overwrite the from() to use patched copy
+        from(tempDir)
+    }
+
+    archiveBaseName.set("minecraft-internal")
+    archiveVersion.set(minecraft_version)
+    destinationDirectory.set(layout.buildDirectory.dir("libs"))
+}

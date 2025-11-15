@@ -1,0 +1,23 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+}
+
+allprojects {
+    group = "com.riverstone.unknown303"
+    version = loader_version
+
+    repositories {
+        mavenCentral()
+        maven { url = "https://repo.spongepowered.org/repository/maven-public/" }
+    }
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+
+        withSourcesJar()
+        withJavadocJar()
+    }
+}
